@@ -1,3 +1,5 @@
+#没错，readme也是AI写的(((
+
 # rlin client
 
 > 一个面向 Android 的 Minecraft 客户端风格界面模块：游戏内的 **ClickGUI + 一组 HUD + 实时背景模糊 / 液态玻璃**，
