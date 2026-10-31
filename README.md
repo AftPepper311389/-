@@ -1,4 +1,4 @@
-#没错，readme也是AI写的(((
+# 没错，readme也是AI写的(((
 
 # rlin client
 
