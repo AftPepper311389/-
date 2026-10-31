@@ -1,0 +1,13 @@
+# build outputs
+.gradle/
+build/
+app/build/
+.cxx/
+app/.cxx/
+local.properties
+.idea/
+*.iml
+captures/
+externalNativeBuild/
+# easter-egg video: copyright of the original author, not distributed
+app/src/main/assets/bangyou.mp4

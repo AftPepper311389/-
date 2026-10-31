@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="xposed_scope">
+        <!-- 目标游戏包名：用 LSPatch 打补丁时本来就是针对这个 APK，这里只是占位 -->
+        <item>com.netease.x19</item>
+        <item>com.mojang.minecraftpe</item>
+    </string-array>
+</resources>
