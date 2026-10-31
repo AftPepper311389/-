@@ -9,7 +9,6 @@ import android.graphics.Outline
 import android.view.ViewOutlineProvider
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
-import com.nemoclient.app.music.GdRate
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
@@ -21,7 +20,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.nemoclient.app.i18n.tr
-import com.nemoclient.app.i18n.tf
 import com.nemoclient.app.music.MusicListener
 import com.nemoclient.app.music.MusicPlayer
 import com.nemoclient.app.music.Track
@@ -31,11 +29,6 @@ import com.nemoclient.app.music.Track
 class MusicPanelView(ctx: Context, private val host: SheetHost, private val page: Boolean = false) : LinearLayout(ctx) {
     private val chips = ArrayList<TextView>()
     private val chipIdx = ArrayList<Int>()
-    private val gdBox = LinearLayout(ctx)
-    private val platChips = ArrayList<TextView>()
-    private val brChips = ArrayList<TextView>()
-    private val quota = TextView(ctx)
-    private val credit = TextView(ctx)
     private val cover = ImageView(ctx)
     private val settingsBox = LinearLayout(ctx)
     private val input = EditText(ctx)
@@ -56,14 +49,13 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
         MusicPlayer.init(ctx)
         orientation = VERTICAL
 
-        // 音源（显示顺序：GD 音乐台 / Jamendo / Internet Archive / 网易云 API / 自定义 API）
+        // 音源（显示顺序：Jamendo / 网易云 API / 自定义 API，都需要用户自己接入）
         val srcRow = LinearLayout(ctx).apply { gravity = Gravity.CENTER_VERTICAL }
         val names = mapOf(
-            MusicPlayer.SOURCE_GD to "GD 音乐台", MusicPlayer.SOURCE_JAMENDO to "Jamendo",
-            MusicPlayer.SOURCE_ARCHIVE to "Internet Archive", MusicPlayer.SOURCE_NETEASE to tr("网易云 API"),
+            MusicPlayer.SOURCE_JAMENDO to "Jamendo", MusicPlayer.SOURCE_NETEASE to tr("网易云 API"),
             MusicPlayer.SOURCE_CUSTOM to tr("自定义 API")
         )
-        for (i in intArrayOf(MusicPlayer.SOURCE_GD, MusicPlayer.SOURCE_JAMENDO, MusicPlayer.SOURCE_ARCHIVE, MusicPlayer.SOURCE_NETEASE, MusicPlayer.SOURCE_CUSTOM)) {
+        for (i in intArrayOf(MusicPlayer.SOURCE_JAMENDO, MusicPlayer.SOURCE_NETEASE, MusicPlayer.SOURCE_CUSTOM)) {
             val c = TextView(ctx).apply {
                 text = names[i]; px(11.5f); setSingleLine(); setPadding(Ui.u(12f), Ui.u(6f), Ui.u(12f), Ui.u(6f))
                 setOnClickListener { MusicPlayer.sourceIdx = i; styleChips() }
@@ -78,27 +70,6 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
             text = tr("设置"); px(11.5f); setTextColor(Palette.ink2); setPadding(Ui.u(4f), Ui.u(6f), Ui.u(8f), Ui.u(2f))
             setOnClickListener { settingsBox.visibility = if (settingsBox.visibility == GONE) VISIBLE else GONE }
         }, LayoutParams(-2, -2).apply { gravity = Gravity.END })
-
-        // GD 音乐台选项：平台 + 音质 + 请求额度
-        gdBox.orientation = VERTICAL
-        fun chipRow(label: String, items: List<String>, store: ArrayList<TextView>, pick: (Int) -> Unit) = LinearLayout(ctx).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(TextView(ctx).apply { text = label; px(11f); setTextColor(Palette.ink2); minWidth = Ui.u(40f) })
-            items.forEachIndexed { i, t ->
-                val c = TextView(ctx).apply {
-                    text = t; px(11f); setSingleLine(); setPadding(Ui.u(10f), Ui.u(4f), Ui.u(10f), Ui.u(4f))
-                    setOnClickListener { pick(i) }
-                }
-                store.add(c); addView(c, LayoutParams(-2, -2).apply { rightMargin = Ui.u(5f) })
-            }
-        }
-        gdBox.addView(chipRow(tr("平台"), listOf("netease", "joox", "bilibili"), platChips) { MusicPlayer.gdPlatform = MusicPlayer.GD_PLATFORMS[it]; styleChips() },
-            LayoutParams(-1, -2).apply { topMargin = Ui.u(6f) })
-        gdBox.addView(chipRow(tr("音质"), listOf("128", "192", "320", tr("740 无损"), tr("999 Hi-Res")), brChips) { MusicPlayer.gdBr = MusicPlayer.GD_BRS[it]; styleChips() },
-            LayoutParams(-1, -2).apply { topMargin = Ui.u(4f) })
-        quota.apply { px(10.5f); setTextColor(Palette.ink2) }
-        gdBox.addView(quota, LayoutParams(-2, -2).apply { topMargin = Ui.u(4f) })
-        addView(gdBox, LayoutParams(-1, -2))
 
         settingsBox.orientation = VERTICAL
         settingsBox.visibility = GONE
@@ -166,9 +137,6 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
         ctl.addView(MusicIconButton(ctx, MusicIconButton.STOP) { MusicPlayer.stop() }, LayoutParams(Ui.u(46f), Ui.u(40f)))
         addView(ctl, LayoutParams(-1, -2).apply { topMargin = Ui.u(2f) })
 
-        credit.apply { px(10f); setTextColor(Palette.ink2); text = tr("音源：GD音乐台(music.gdstudio.xyz) · 仅供学习，禁止商用") }
-        addView(credit, LayoutParams(-2, -2).apply { topMargin = Ui.u(4f) })
-
         styleChips()
         refresh(true)
     }
@@ -193,16 +161,6 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
 
     private fun styleChips() {
         for (i in chips.indices) chipStyle(chips[i], chipIdx[i] == MusicPlayer.sourceIdx)
-        val gd = MusicPlayer.sourceIdx == MusicPlayer.SOURCE_GD
-        gdBox.visibility = if (gd) VISIBLE else GONE
-        credit.visibility = if (gd) VISIBLE else GONE
-        for (i in platChips.indices) chipStyle(platChips[i], MusicPlayer.GD_PLATFORMS[i] == MusicPlayer.gdPlatform)
-        for (i in brChips.indices) chipStyle(brChips[i], MusicPlayer.GD_BRS[i] == MusicPlayer.gdBr)
-        updateQuota()
-    }
-
-    private fun updateQuota() {
-        quota.text = tf("近 5 分钟已请求 %d / %d 次（搜索 1 次，播放一首约 3 次）", GdRate.used(), GdRate.MAX)
     }
 
     private fun doSearch() {
@@ -210,7 +168,6 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
         if (q.isEmpty()) return
         results.removeAllViews(); hint.text = tr("搜索中…"); results.addView(hint)
         MusicPlayer.search(q) { list, err ->
-            updateQuota()
             results.removeAllViews()
             if (list == null) { hint.text = tr("搜索失败：") + (err ?: ""); results.addView(hint); return@search }
             found = list
@@ -249,7 +206,6 @@ class MusicPanelView(ctx: Context, private val host: SheetHost, private val page
         time.setIf(MusicPlayer.fmt(MusicPlayer.posMs) + " / " + MusicPlayer.fmt(MusicPlayer.durMs))
         val cb = MusicPlayer.coverBmp
         if (cb !== shownCover) { shownCover = cb; cover.setImageBitmap(cb) }
-        if (trackChanged) updateQuota()
         bar.invalidate()
     }
 

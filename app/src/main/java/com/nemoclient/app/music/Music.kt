@@ -20,7 +20,7 @@ import java.util.concurrent.Executors
 class Track(
     val id: String, val title: String, val artist: String, val album: String,
     val durationMs: Long, var url: String?, var cover: String?, val source: Int,
-    /** GD 音乐台：专辑图 ID / 歌词 ID / 所属平台（netease、joox…）；其它音源为空 */
+    /** 音源自定义的拓展字段（封面 ID / 歌词 ID / 所属平台），不用的音源为空 */
     val picId: String? = null, val lyricId: String? = null, val platform: String? = null,
     /** 把 http 直链升级成 https 后，原始 http 链接留作回退（游戏进程可能禁止明文，也可能 https 不通） */
     var fallbackUrl: String? = null
@@ -35,7 +35,7 @@ interface MusicSource {
     fun resolve(t: Track): String?
     /** 带时间轴的 LRC 文本；没有返回 null（会回退到 LRCLIB） */
     fun lyric(t: Track): String? = null
-    /** 封面图直链；默认用 Track.cover，音源可以覆盖（比如 GD 需要再请求一次） */
+    /** 封面图直链；默认用 Track.cover，音源可以覆盖（比如要再请求一次才能拿到） */
     fun cover(t: Track): String? = t.cover
 }
 
@@ -69,28 +69,6 @@ class JamendoSource(private val clientId: String, private val idx: Int) : MusicS
         }
     }
     override fun resolve(t: Track): String? = t.url
-}
-
-/** Internet Archive：免 key，搜索公共领域 / 自由授权音频条目，取条目里第一个 mp3。 */
-class ArchiveSource(private val idx: Int) : MusicSource {
-    override val name = "Internet Archive"
-    override fun search(q: String, limit: Int): List<Track> {
-        val query = "(${q}) AND mediatype:audio"
-        val j = JSONObject(Http.get("https://archive.org/advancedsearch.php?q=${Http.enc(query)}" +
-            "&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&rows=$limit&output=json"))
-        val a = j.optJSONObject("response")?.optJSONArray("docs") ?: JSONArray()
-        return (0 until a.length()).map { a.getJSONObject(it) }.map {
-            Track(it.str("identifier"), it.str("title").ifEmpty { it.str("identifier") }, it.str("creator"), "", 0L, null, null, idx)
-        }
-    }
-    override fun resolve(t: Track): String? {
-        val files = JSONObject(Http.get("https://archive.org/metadata/${Http.enc(t.id)}")).optJSONArray("files") ?: return null
-        for (i in 0 until files.length()) {
-            val n = files.getJSONObject(i).str("name")
-            if (n.endsWith(".mp3", true)) return "https://archive.org/download/${Http.enc(t.id)}/" + n.split("/").joinToString("/") { Http.enc(it).replace("+", "%20") }
-        }
-        return null
-    }
 }
 
 /**
@@ -157,90 +135,7 @@ class NeteaseSource(base: String, private val cookie: String, private val idx: I
 }
 
 
-/**
- * GD 音乐台 API（https://music-api.gdstudio.xyz，作者 GD Studio，CC BY-NC 4.0，仅供学习，禁止商用）。
- * 稳定音乐源：netease / joox / bilibili。访问频率限制：5 分钟内不超 50 次 → 本地限流（[GdRate]），超了直接提示而不是硬发。
- *   search：types=search&source=&name=&count=&pages=
- *   url   ：types=url&source=&id=&br=（128/192/320/740/999）→ {url, br, size}
- *   pic   ：types=pic&source=&id=&size=（300/500）→ {url}
- *   lyric ：types=lyric&source=&id= → {lyric, tlyric}
- * 拿不到链接（无版权 / 需会员）时只降一次音质重试，仍没有就提示，不做任何绕过。
- */
-class GdSource(private val platform: String, private val br: Int, private val idx: Int) : MusicSource {
-    override val name = "GD 音乐台"
-    private val base = "https://music-api.gdstudio.xyz/api.php?"
-
-    private fun api(q: String): String { GdRate.acquire(); return Http.get(base + q) }
-
-    private fun anyStr(o: JSONObject, k: String): String {
-        val v = o.opt(k) ?: return ""
-        if (v == JSONObject.NULL) return ""
-        if (v is JSONArray) return (0 until v.length()).joinToString("/") { v.opt(it)?.toString() ?: "" }
-        return v.toString()
-    }
-
-    override fun search(q: String, limit: Int): List<Track> {
-        val raw = api("types=search&source=$platform&name=${Http.enc(q)}&count=$limit&pages=1").trim()
-        val a = try { JSONArray(raw) } catch (e: org.json.JSONException) {
-            val msg = runCatching { JSONObject(raw).let { it.str("error").ifEmpty { it.str("msg") } } }.getOrDefault("")
-            throw IllegalStateException(msg.ifEmpty { "接口返回异常" })
-        }
-        return (0 until a.length()).map { a.getJSONObject(it) }.map {
-            Track(anyStr(it, "id"), anyStr(it, "name"), anyStr(it, "artist"), anyStr(it, "album"), 0L, null, null, idx,
-                picId = anyStr(it, "pic_id").ifEmpty { null },
-                lyricId = anyStr(it, "lyric_id").ifEmpty { null },
-                platform = anyStr(it, "source").ifEmpty { platform })
-        }.filter { it.id.isNotEmpty() }
-    }
-
-    override fun resolve(t: Track): String? {
-        val plat = t.platform ?: platform
-        fun tryBr(b: Int): String? =
-            JSONObject(api("types=url&source=$plat&id=${Http.enc(t.id)}&br=$b")).str("url").ifEmpty { null }
-        var u = tryBr(br)
-        if (u == null && br > 320) u = tryBr(320)
-        if (u == null) throw IllegalStateException("该曲目暂无可用链接（可能无版权或需要会员）")
-        if (u.startsWith("http://")) { t.fallbackUrl = u; u = "https://" + u.substring(7) }
-        return u
-    }
-
-    override fun lyric(t: Track): String? = runCatching {
-        val plat = t.platform ?: platform
-        JSONObject(api("types=lyric&source=$plat&id=${Http.enc(t.lyricId ?: t.id)}")).str("lyric").ifEmpty { null }
-    }.getOrNull()
-
-    override fun cover(t: Track): String? {
-        t.cover?.let { return it }
-        val pid = t.picId ?: return null
-        val plat = t.platform ?: platform
-        val u = runCatching { JSONObject(api("types=pic&source=$plat&id=${Http.enc(pid)}&size=300")).str("url").ifEmpty { null } }.getOrNull()
-        t.cover = u
-        return u
-    }
-}
-
-/** GD 音乐台的本地限流：滑动窗口 5 分钟、最多 48 次（官方上限 50，留 2 次余量）。 */
-object GdRate {
-    private const val LIMIT = 48
-    private const val WINDOW = 300_000L
-    private val ts = java.util.ArrayDeque<Long>()
-
-    @Synchronized private fun trim(now: Long) { while (ts.isNotEmpty() && now - ts.peekFirst()!! > WINDOW) ts.pollFirst() }
-
-    @Synchronized fun acquire() {
-        val now = System.currentTimeMillis(); trim(now)
-        if (ts.size >= LIMIT) {
-            val wait = (WINDOW - (now - ts.peekFirst()!!)) / 1000 + 1
-            throw IllegalStateException("请求过于频繁（GD 音乐台限制 5 分钟内 50 次），请 ${wait} 秒后再试")
-        }
-        ts.addLast(now)
-    }
-
-    @Synchronized fun used(): Int { trim(System.currentTimeMillis()); return ts.size }
-    const val MAX = 50
-}
-
-/** 封面：下载 + 缩小解码，最近 8 张缓存在内存。图片本身不走 GD 接口，不占请求额度。 */
+/** 封面：下载 + 缩小解码，最近 8 张缓存在内存。 */
 internal object CoverLoader {
     private val cache = object : android.util.LruCache<String, Bitmap>(8) {}
 
@@ -303,13 +198,10 @@ fun interface MusicListener { fun onChange(trackChanged: Boolean) }
  * 不申请音频焦点：和游戏声音混着放，不会把游戏静音。联网/解析都在后台线程，回调回主线程。
  */
 object MusicPlayer {
+    /** 音源：只保留用户自己接入的三种（Jamendo 要自己申请 client_id，网易云 / 自定义要自己填服务地址） */
     const val SOURCE_JAMENDO = 0
-    const val SOURCE_ARCHIVE = 1
-    const val SOURCE_CUSTOM = 2
-    const val SOURCE_NETEASE = 3
-    const val SOURCE_GD = 4
-    val GD_PLATFORMS = arrayOf("netease", "joox", "bilibili")
-    val GD_BRS = intArrayOf(128, 192, 320, 740, 999)
+    const val SOURCE_CUSTOM = 1
+    const val SOURCE_NETEASE = 2
 
     private val main = Handler(Looper.getMainLooper())
     private val pool = Executors.newFixedThreadPool(3)
@@ -338,7 +230,7 @@ object MusicPlayer {
     }
 
     var sourceIdx: Int
-        get() = prefs?.getInt("src", SOURCE_GD) ?: SOURCE_GD
+        get() = (prefs?.getInt("src", SOURCE_JAMENDO) ?: SOURCE_JAMENDO).takeIf { it in 0..SOURCE_NETEASE } ?: SOURCE_JAMENDO
         set(v) { prefs?.edit()?.putInt("src", v)?.apply() }
     var jamendoId: String
         get() = prefs?.getString("jid", "") ?: ""
@@ -352,12 +244,6 @@ object MusicPlayer {
     var neteaseCookie: String
         get() = prefs?.getString("ncookie", "") ?: ""
         set(v) { prefs?.edit()?.putString("ncookie", v.trim())?.apply() }
-    var gdPlatform: String
-        get() = prefs?.getString("gdp", "netease")?.takeIf { it in GD_PLATFORMS } ?: "netease"
-        set(v) { prefs?.edit()?.putString("gdp", v)?.apply() }
-    var gdBr: Int
-        get() = prefs?.getInt("gdbr", 320)?.takeIf { it in GD_BRS } ?: 320
-        set(v) { prefs?.edit()?.putInt("gdbr", v)?.apply() }
     var volume: Float
         get() = prefs?.getFloat("vol", 1f) ?: 1f
         set(v) { prefs?.edit()?.putFloat("vol", v)?.apply(); mp?.setVolume(v, v) }
@@ -366,8 +252,7 @@ object MusicPlayer {
         SOURCE_JAMENDO -> JamendoSource(jamendoId, i)
         SOURCE_CUSTOM -> CustomSource(customBase, i)
         SOURCE_NETEASE -> NeteaseSource(neteaseBase, neteaseCookie, i)
-        SOURCE_GD -> GdSource(gdPlatform, gdBr, i)
-        else -> ArchiveSource(i)
+        else -> JamendoSource(jamendoId, SOURCE_JAMENDO)
     }
 
     fun addListener(l: MusicListener) { listeners.addIfAbsent(l) }
@@ -402,8 +287,8 @@ object MusicPlayer {
         pool.execute {
             var url: String? = null; var err: String? = null
             try {
-                // GD / 网易云的直链会过期（约十几二十分钟），不缓存，每次播放重新取
-                val cache = t.source != SOURCE_GD && t.source != SOURCE_NETEASE
+                // 网易云 API 的直链会过期（约十几二十分钟），不缓存，每次播放重新取
+                val cache = t.source != SOURCE_NETEASE
                 url = (if (cache) t.url else null) ?: source(t.source).resolve(t)
                 if (cache) t.url = url
             } catch (e: Throwable) { err = e.message ?: e.javaClass.simpleName }
@@ -412,7 +297,7 @@ object MusicPlayer {
                 if (url == null) { fail(err ?: "没有可播放的音频"); return@post }
                 startPlayer(url, g)
             }
-            // 已经切歌了就别再浪费请求额度（GD 限 5 分钟 50 次）
+            // 已经切歌了就别再继续取歌词 / 封面，避免浪费请求
             if (g != gen || url == null) return@execute
             // 歌词：音源自带优先，其次 LRCLIB
             val lrc = runCatching { source(t.source).lyric(t) ?: Lrc.fetchLrclib(t) }.getOrNull()
